@@ -261,22 +261,80 @@ class ConversionController extends Controller
      * Note: User asked label-based matching (not field codes)
      */
     private function extractCity(array $labeledData, array $rawItem): ?string
-    {
-        // Try raw address city first
-        if (!empty($rawItem['ADDRESS_CITY'])) return (string)$rawItem['ADDRESS_CITY'];
+{
+    // 1️⃣ Highest priority: standard Bitrix field
+    if (!empty($rawItem['ADDRESS_CITY']) && is_string($rawItem['ADDRESS_CITY'])) {
+        return trim($rawItem['ADDRESS_CITY']);
+    }
 
-        foreach ($labeledData as $label => $value) {
-            $l = strtolower(trim($label));
-            if (Str::contains($l, ['city', 'town'])) {
-                if ($value === 'Y' || $value === 'N') continue;
-                if (is_array($value)) {
-                    return null;
-                }
-                return (string)$value;
+    // 2️⃣ Search by human-readable labels (City / Town)
+    foreach ($labeledData as $label => $value) {
+        $labelNormalized = strtolower(trim((string) $label));
+
+        if (!Str::contains($labelNormalized, ['city', 'town'])) {
+            continue;
+        }
+
+        // Skip boolean flags
+        if ($value === 'Y' || $value === 'N' || $value === null) {
+            continue;
+        }
+
+        /*
+         |-----------------------------------------
+         | Value handling (ALL Bitrix cases)
+         |-----------------------------------------
+         */
+
+        // Case 1: simple string
+        if (is_string($value)) {
+            $v = trim($value);
+            if ($v !== '') {
+                return $v;
             }
         }
-        return null;
+
+        // Case 2: array (custom fields, multifields, isMultiple)
+        if (is_array($value)) {
+
+            // Example: ["Abu Dhabi"]
+            if (isset($value[0]) && is_string($value[0])) {
+                $v = trim($value[0]);
+                if ($v !== '') {
+                    return $v;
+                }
+            }
+
+            // Example: [{ VALUE: "Abu Dhabi" }]
+            if (isset($value[0]['VALUE']) && is_string($value[0]['VALUE'])) {
+                $v = trim($value[0]['VALUE']);
+                if ($v !== '') {
+                    return $v;
+                }
+            }
+
+            // Example: associative array
+            foreach ($value as $v) {
+                if (is_string($v)) {
+                    $vv = trim($v);
+                    if ($vv !== '') {
+                        return $vv;
+                    }
+                }
+
+                if (is_array($v) && isset($v['VALUE']) && is_string($v['VALUE'])) {
+                    $vv = trim($v['VALUE']);
+                    if ($vv !== '') {
+                        return $vv;
+                    }
+                }
+            }
+        }
     }
+
+    return null;
+}
+
 
     /**
      * Extract first and last name by label heuristics; fallback to TITLE (raw $item)
