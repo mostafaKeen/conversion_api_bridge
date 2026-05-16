@@ -70,11 +70,17 @@ class ConversionController extends Controller
             // 4️⃣ Map data by LABEL (human-readable labels)
             $labeledData = $this->mapByLabel($item, $fields);
 
+            // 4.1 Fetch Contact if it's a Deal (Deals usually don't have phone/email directly)
+            $contact = null;
+            if ($entityType === 'DEAL' && !empty($item['CONTACT_ID'])) {
+                $contact = $this->bitrixCall($company, 'crm.contact.get', ['id' => $item['CONTACT_ID']])['result'] ?? null;
+            }
+
             // 5️⃣ Extract required fields
-            // Note: pass both labeledData and raw $item (TITLE fallback)
-            $name  = $this->extractName($labeledData, $item);
-            $phone = $this->extractPhone($labeledData, $item);
-            $email = $this->extractEmail($labeledData, $item);
+            // Note: pass labeledData, raw item, and optional contact
+            $name  = $this->extractName($labeledData, $item, $contact);
+            $phone = $this->extractPhone($labeledData, $item, $contact);
+            $email = $this->extractEmail($labeledData, $item, $contact);
             $city  = $this->extractCity($labeledData, $item);
 
             // 6️⃣ Validate required fields: first + last + phone + email are required
@@ -205,16 +211,23 @@ class ConversionController extends Controller
      * Extract phone by matching label substrings like 'phone', 'tel', 'mobile'
      * Returns the first phone found (string) or null.
      */
-    private function extractPhone(array $labeledData, array $rawItem): ?string
+    private function extractPhone(array $labeledData, array $rawItem, ?array $contact = null): ?string
     {
-        // 1. Try standard Bitrix field 'PHONE'
+        // 1. Try standard Bitrix field 'PHONE' in the main item
         if (!empty($rawItem['PHONE']) && is_array($rawItem['PHONE'])) {
             foreach ($rawItem['PHONE'] as $p) {
                 if (!empty($p['VALUE'])) return (string)$p['VALUE'];
             }
         }
 
-        // 2. Try labeled data
+        // 2. Try standard Bitrix field 'PHONE' in the linked contact
+        if ($contact && !empty($contact['PHONE']) && is_array($contact['PHONE'])) {
+            foreach ($contact['PHONE'] as $p) {
+                if (!empty($p['VALUE'])) return (string)$p['VALUE'];
+            }
+        }
+
+        // 3. Try labeled data from the main item
         foreach ($labeledData as $label => $value) {
             $l = strtolower(trim($label));
             if (Str::contains($l, ['phone', 'tel', 'mobile', 'cell'])) {
@@ -232,16 +245,23 @@ class ConversionController extends Controller
     /**
      * Extract email by matching label substrings like 'email', 'e-mail', 'mail'
      */
-    private function extractEmail(array $labeledData, array $rawItem): ?string
+    private function extractEmail(array $labeledData, array $rawItem, ?array $contact = null): ?string
     {
-        // 1. Try standard Bitrix field 'EMAIL'
+        // 1. Try standard Bitrix field 'EMAIL' in the main item
         if (!empty($rawItem['EMAIL']) && is_array($rawItem['EMAIL'])) {
             foreach ($rawItem['EMAIL'] as $e) {
                 if (!empty($e['VALUE'])) return (string)$e['VALUE'];
             }
         }
 
-        // 2. Try labeled data
+        // 2. Try standard Bitrix field 'EMAIL' in the linked contact
+        if ($contact && !empty($contact['EMAIL']) && is_array($contact['EMAIL'])) {
+            foreach ($contact['EMAIL'] as $e) {
+                if (!empty($e['VALUE'])) return (string)$e['VALUE'];
+            }
+        }
+
+        // 3. Try labeled data from the main item
         foreach ($labeledData as $label => $value) {
             $l = strtolower(trim($label));
             if (Str::contains($l, ['email', 'e-mail', 'mail'])) {
@@ -337,16 +357,22 @@ class ConversionController extends Controller
 
 
     /**
-     * Extract first and last name by label heuristics; fallback to TITLE (raw $item)
+     * Extract first and last name by label heuristics; fallback to contact or TITLE
      * Returns ['first_name' => ..., 'last_name' => ...]
      */
-    private function extractName(array $labeledData, array $rawItem): array
+    private function extractName(array $labeledData, array $rawItem, ?array $contact = null): array
     {
         // 1. Try standard Bitrix fields NAME and LAST_NAME first
         $first = $rawItem['NAME'] ?? null;
         $last  = $rawItem['LAST_NAME'] ?? null;
 
-        // If LAST_NAME is missing, try to split NAME (case where full name is in NAME field)
+        // 1.1 Try contact fields if missing (important for deals)
+        if ($contact) {
+            if (empty($first)) $first = $contact['NAME'] ?? null;
+            if (empty($last))  $last  = $contact['LAST_NAME'] ?? null;
+        }
+
+        // If LAST_NAME is still missing, try to split NAME (case where full name is in NAME field)
         if (empty($last) && !empty($first)) {
             $parts = preg_split('/\s+/', trim((string)$first), 2);
             if (count($parts) > 1) {
